@@ -1,267 +1,396 @@
-#include <iostream>          // Para mostrar mensajes en consola
-#include <cmath>             // Para usar sin, cos, tan y sqrt
-#include <glad/glad.h>       // Permite usar funciones de OpenGL
-#include <GLFW/glfw3.h>      // Sirve para crear la ventana y manejar eventos
+#include <iostream>                         // Permite mostrar mensajes y errores en consola
+#include <glad/glad.h>                      // Carga y permite usar las funciones de OpenGL
+#include <GLFW/glfw3.h>                     // Crea la ventana y permite manejar sus eventos
 
-// Este shader se encarga de la posición de los triángulos
+#include <glm/glm/glm.hpp>                  // Permite trabajar con vectores y matrices
+#include <glm/glm/gtc/matrix_transform.hpp> // Permite usar perspective, lookAt y rotate
+#include <glm/glm/gtc/type_ptr.hpp>          // Permite enviar matrices GLM a OpenGL
+
+#include <cstddef>                           // Permite usar offsetof
+
+
+// Vertex Shader: se encarga principalmente de calcular la posición de cada vértice
 const char* vertexShaderSource = R"(
 #version 410 core
 
-layout(location = 0) in vec3 aPos; // Recibe la posición X, Y y Z de cada vértice
+layout(location = 0) in vec3 aPos;           // Recibe la posición X, Y y Z del vértice
+layout(location = 1) in vec4 aColor;         // Recibe el color R, G, B y Alpha del vértice
 
-uniform mat4 model;       // Controla tamaño, giro y posición del triángulo
-uniform mat4 view;        // Representa la cámara
-uniform mat4 projection;  // Crea la perspectiva
+uniform mat4 uMVP;                            // Matriz que combina Model, View y Projection
+
+out vec4 vertexColor;                         // Variable que envía el color al Fragment Shader
 
 void main()
 {
-    gl_Position = projection * view * model * vec4(aPos, 1.0); // Junta objeto, cámara y perspectiva
+    gl_Position = uMVP * vec4(aPos, 1.0);    // Transforma la posición usando la matriz MVP
+    vertexColor = aColor;                     // Pasa el color del vértice al Fragment Shader
 }
 )";
 
-// Este shader se encarga del color
+
+// Fragment Shader: se encarga de decidir el color final de cada fragmento
 const char* fragmentShaderSource = R"(
 #version 410 core
 
-out vec4 FragColor; // Aquí queda guardado el color final
-
-uniform vec4 color; // Recibe el color desde C++
+in vec4 vertexColor;                          // Recibe el color enviado por el Vertex Shader
+out vec4 FragColor;                           // Guarda el color final que aparecerá en pantalla
 
 void main()
 {
-    FragColor = color; // Aplica el color al triángulo
+    FragColor = vertexColor;                  // Aplica el color recibido al fragmento
 }
 )";
 
-// Esta función crea la perspectiva
-void perspective(float* m, float fov, float aspect, float n, float f)
+
+// Esta función revisa si un shader tuvo errores al compilar
+void printShaderLog(GLuint shader, const char* name)
 {
-    float t = tan(fov / 2.0f); // Calcula el campo de visión
+    GLint success = 0;                        // Guarda si la compilación fue correcta o no
 
-    for (int i = 0; i < 16; i++)
-        m[i] = 0.0f; // Primero pone toda la matriz en cero
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &success); // Consulta el estado de compilación
 
-    m[0] = 1.0f / (aspect * t);      // Perspectiva horizontal
-    m[5] = 1.0f / t;                 // Perspectiva vertical
-    m[10] = -(f + n) / (f - n);      // Profundidad
-    m[11] = -1.0f;                   // Activa el efecto de perspectiva
-    m[14] = -(2.0f * f * n) / (f - n); // Usa el plano cercano y lejano
+    if (!success)                             // Entra solamente si ocurrió un error
+    {
+        GLchar infoLog[1024];                 // Aquí se guarda el mensaje del error
+
+        glGetShaderInfoLog(
+            shader,
+            sizeof(infoLog),
+            nullptr,
+            infoLog
+        );
+
+        std::cerr << "ERROR: Shader compile failed ("
+                  << name << ")\n"
+                  << infoLog << std::endl;    // Muestra el error en consola
+    }
 }
 
-// Esta función crea la cámara
-void lookAt(float* m,
-            float ex, float ey, float ez,
-            float cx, float cy, float cz,
-            float ux, float uy, float uz)
+
+// Esta función revisa si hubo errores al unir los shaders
+void printProgramLog(GLuint program)
 {
-    // ex, ey, ez = posición de la cámara
-    // cx, cy, cz = punto hacia donde mira
-    // ux, uy, uz = dirección que se considera arriba
+    GLint success = 0;                        // Guarda si el programa se enlazó correctamente
 
-    float fx = cx - ex;
-    float fy = cy - ey;
-    float fz = cz - ez;
+    glGetProgramiv(program, GL_LINK_STATUS, &success); // Consulta el estado del programa
 
-    float fl = sqrt(fx * fx + fy * fy + fz * fz); // Longitud del vector de mirada
-    fx /= fl;
-    fy /= fl;
-    fz /= fl; // Normaliza el vector
+    if (!success)                             // Entra solamente si hubo un error
+    {
+        GLchar infoLog[1024];                 // Guarda el mensaje del error
 
-    float sx = fy * uz - fz * uy;
-    float sy = fz * ux - fx * uz;
-    float sz = fx * uy - fy * ux;
+        glGetProgramInfoLog(
+            program,
+            sizeof(infoLog),
+            nullptr,
+            infoLog
+        );
 
-    float sl = sqrt(sx * sx + sy * sy + sz * sz); // Longitud del vector lateral
-    sx /= sl;
-    sy /= sl;
-    sz /= sl; // Normaliza el vector lateral
-
-    float rx = sy * fz - sz * fy;
-    float ry = sz * fx - sx * fz;
-    float rz = sx * fy - sy * fx;
-
-    // Arma la matriz de cámara
-    m[0] = sx;   m[4] = sy;   m[8]  = sz;   m[12] = -(sx * ex + sy * ey + sz * ez);
-    m[1] = rx;   m[5] = ry;   m[9]  = rz;   m[13] = -(rx * ex + ry * ey + rz * ez);
-    m[2] = -fx;  m[6] = -fy;  m[10] = -fz;  m[14] =  (fx * ex + fy * ey + fz * ez);
-    m[3] = 0.0f; m[7] = 0.0f; m[11] = 0.0f; m[15] = 1.0f;
+        std::cerr << "ERROR: Program link failed\n"
+                  << infoLog << std::endl;    // Muestra el error en consola
+    }
 }
 
-// Esta función crea la matriz de cada triángulo
-void model(float* m, float scale, float z, float angle)
+
+// Esta estructura define qué información tiene cada vértice
+struct VertexTriangle
 {
-    // scale = tamaño del triángulo
-    // z = qué tan adelante o atrás está
-    // angle = cuánto ha girado en Z
+    GLfloat pos[3];                           // Posición: X, Y, Z
+    GLfloat color[4];                         // Color: R, G, B, Alpha
+};
 
-    float c = cos(angle);
-    float s = sin(angle);
+// Crea otro nombre para la estructura siguiendo la organización del profesor
+using Vertex3angle = VertexTriangle;
 
-    for (int i = 0; i < 16; i++)
-        m[i] = 0.0f; // Limpia la matriz
-
-    // Esto hace el giro sobre Z y también aplica la escala
-    m[0] =  c * scale;
-    m[1] =  s * scale;
-    m[4] = -s * scale;
-    m[5] =  c * scale;
-
-    m[10] = 1.0f; // Mantiene el eje Z normal
-    m[14] = z;    // Mueve el triángulo en profundidad
-    m[15] = 1.0f; // Completa la matriz
-}
 
 int main()
 {
-    glfwInit(); // Inicia GLFW
+    glfwInit();                               // Inicializa GLFW antes de crear la ventana
 
-    // Esta es la versión que te funciona en Mac
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 1);
-    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE); // Necesario en macOS
 
-    // Crea la ventana
-    GLFWwindow* window = glfwCreateWindow(800, 800, "Tres Triangulos", NULL, NULL);
+    // Configura la versión de OpenGL
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);       // Versión mayor: 4
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 1);       // Versión menor: 1
+    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE); // Usa el perfil Core
+    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE); // Necesario para OpenGL en macOS
+    glfwWindowHint(GLFW_DEPTH_BITS, 24);                 // Solicita 24 bits para profundidad
 
-    // Revisa si la ventana sí se creó
-    if (window == NULL)
+
+    // Aquí se guardan los tres triángulos en un mismo arreglo
+    // Cada triángulo necesita 3 vértices, por eso tenemos 9 vértices en total
+    // Cada vértice contiene primero XYZ y después RGBA
+    Vertex3angle triangles[] =
     {
-        std::cout << "Failed to create GLFW window" << std::endl;
-        glfwTerminate();
-        return -1;
-    }
+        // Triángulo grande rosado: está adelante porque Z = 0
+        {{-0.50f, -0.30f,  0.0f}, {1.00f, 0.62f, 0.76f, 0.60f}}, // Vértice inferior izquierdo
+        {{ 0.50f, -0.30f,  0.0f}, {1.00f, 0.62f, 0.76f, 0.60f}}, // Vértice inferior derecho
+        {{ 0.00f,  0.60f,  0.0f}, {1.00f, 0.62f, 0.76f, 0.60f}}, // Vértice superior
 
-    glfwMakeContextCurrent(window); // Activa la ventana actual
+        // Triángulo mediano morado: está más atrás porque Z = -1.5
+        {{-0.35f, -0.21f, -1.5f}, {0.75f, 0.60f, 0.95f, 0.60f}}, // Vértice inferior izquierdo
+        {{ 0.35f, -0.21f, -1.5f}, {0.75f, 0.60f, 0.95f, 0.60f}}, // Vértice inferior derecho
+        {{ 0.00f,  0.42f, -1.5f}, {0.75f, 0.60f, 0.95f, 0.60f}}, // Vértice superior
 
-    // Carga GLAD
-    if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
-    {
-        std::cout << "Failed to initialize GLAD" << std::endl;
-        return -1;
-    }
-
-    glViewport(0, 0, 800, 800); // Área donde se va a dibujar
-
-    glEnable(GL_DEPTH_TEST); // Hace que OpenGL sepa cuál triángulo está adelante y cuál atrás
-
-    glEnable(GL_BLEND); // Activa la transparencia
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); // Mezcla el color con lo de atrás
-
-    // Estos 3 puntos forman un triángulo
-    GLfloat vertices[] =
-    {
-        -0.5f, -0.3f, 0.0f, // Punto inferior izquierdo
-         0.5f, -0.3f, 0.0f, // Punto inferior derecho
-         0.0f,  0.6f, 0.0f  // Punto superior
+        // Triángulo pequeño azul: está todavía más atrás porque Z = -3
+        {{-0.20f, -0.12f, -3.0f}, {0.55f, 0.80f, 1.00f, 0.60f}}, // Vértice inferior izquierdo
+        {{ 0.20f, -0.12f, -3.0f}, {0.55f, 0.80f, 1.00f, 0.60f}}, // Vértice inferior derecho
+        {{ 0.00f,  0.24f, -3.0f}, {0.55f, 0.80f, 1.00f, 0.60f}}  // Vértice superior
     };
 
-    // Crea el Vertex Shader
-    GLuint vertexShader = glCreateShader(GL_VERTEX_SHADER);
-    glShaderSource(vertexShader, 1, &vertexShaderSource, NULL); // Le pasa el código
-    glCompileShader(vertexShader); // Lo compila
 
-    // Crea el Fragment Shader
-    GLuint fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
-    glShaderSource(fragmentShader, 1, &fragmentShaderSource, NULL); // Le pasa el código
-    glCompileShader(fragmentShader); // Lo compila
+    // Crea una ventana de 800 x 800 píxeles
+    GLFWwindow* window = glfwCreateWindow(
+        800,                                   // Ancho de la ventana
+        800,                                   // Alto de la ventana
+        "Tres Triangulos",                     // Nombre de la ventana
+        nullptr,
+        nullptr
+    );
 
-    // Crea el programa y une los shaders
-    GLuint shaderProgram = glCreateProgram();
-    glAttachShader(shaderProgram, vertexShader);
-    glAttachShader(shaderProgram, fragmentShader);
-    glLinkProgram(shaderProgram);
 
-    // Ya no hacen falta los shaders por separado
-    glDeleteShader(vertexShader);
-    glDeleteShader(fragmentShader);
-
-    // VAO organiza y VBO guarda los vértices
-    GLuint VAO, VBO;
-    glGenVertexArrays(1, &VAO);
-    glGenBuffers(1, &VBO);
-
-    glBindVertexArray(VAO); // Activa el VAO
-    glBindBuffer(GL_ARRAY_BUFFER, VBO); // Activa el VBO
-
-    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW); // Manda los vértices a la GPU
-
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0); // Le dice a OpenGL cómo leer los vértices
-    glEnableVertexAttribArray(0); // Activa ese atributo
-
-    glBindBuffer(GL_ARRAY_BUFFER, 0); // Deja de usar el VBO por ahora
-    glBindVertexArray(0); // Deja de usar el VAO por ahora
-
-    // Busca las variables dentro del shader
-    GLint modelLoc = glGetUniformLocation(shaderProgram, "model");
-    GLint viewLoc = glGetUniformLocation(shaderProgram, "view");
-    GLint projectionLoc = glGetUniformLocation(shaderProgram, "projection");
-    GLint colorLoc = glGetUniformLocation(shaderProgram, "color");
-
-    // Crea la matriz de perspectiva
-    float proj[16];
-    perspective(proj, 45.0f * 3.1416f / 180.0f, 1.0f, 0.1f, 100.0f);
-
-    // Bucle principal
-    while (!glfwWindowShouldClose(window))
+    // Revisa si la ventana pudo crearse correctamente
+    if (window == nullptr)
     {
-        glClearColor(0.07f, 0.08f, 0.14f, 1.0f); // Color del fondo
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT); // Limpia color y profundidad
-
-        glUseProgram(shaderProgram); // Activa el shader
-
-        float t = (float)glfwGetTime(); // Tiempo que lleva abierto el programa
-
-        // Esto hace que la cámara gire en círculo despacito
-        float radius = 5.0f;
-        float camX = sin(t * 0.25f) * radius;
-        float camZ = cos(t * 0.25f) * radius - 1.5f;
-
-        float view[16];
-
-        // Crea la cámara
-        lookAt(
-            view,
-            camX, 0.5f, camZ,   // Dónde está la cámara
-            0.0f, 0.0f, -1.5f,  // Hacia dónde mira
-            0.0f, 1.0f, 0.0f    // Qué dirección es arriba
-        );
-
-        glUniformMatrix4fv(viewLoc, 1, GL_FALSE, view); // Manda la cámara
-        glUniformMatrix4fv(projectionLoc, 1, GL_FALSE, proj); // Manda la perspectiva
-
-        glBindVertexArray(VAO); // Activa los vértices
-
-        float M[16]; // Aquí se guarda la matriz de cada triángulo
-
-        // Triángulo grande
-        model(M, 1.0f, 0.0f, t * 0.30f); // Grande, adelante y girando en Z
-        glUniformMatrix4fv(modelLoc, 1, GL_FALSE, M);
-        glUniform4f(colorLoc, 1.0f, 0.62f, 0.76f, 0.60f); // Rosado con transparencia
-        glDrawArrays(GL_TRIANGLES, 0, 3);
-
-        // Triángulo mediano
-        model(M, 0.7f, -1.5f, t * 0.30f); // Mediano y más atrás
-        glUniformMatrix4fv(modelLoc, 1, GL_FALSE, M);
-        glUniform4f(colorLoc, 0.75f, 0.60f, 0.95f, 0.60f); // Morado con transparencia
-        glDrawArrays(GL_TRIANGLES, 0, 3);
-
-        // Triángulo pequeño
-        model(M, 0.4f, -3.0f, t * 0.30f); // Pequeño y más al fondo
-        glUniformMatrix4fv(modelLoc, 1, GL_FALSE, M);
-        glUniform4f(colorLoc, 0.55f, 0.80f, 1.0f, 0.60f); // Azul con transparencia
-        glDrawArrays(GL_TRIANGLES, 0, 3);
-
-        glfwSwapBuffers(window); // Muestra lo dibujado
-        glfwPollEvents(); // Revisa eventos
+        std::cerr << "Failed to create GLFW window" << std::endl; // Muestra el error
+        glfwTerminate();                       // Finaliza GLFW
+        return -1;                             // Termina el programa indicando error
     }
 
-    glDeleteVertexArrays(1, &VAO); // Borra el VAO
-    glDeleteBuffers(1, &VBO); // Borra el VBO
-    glDeleteProgram(shaderProgram); // Borra el programa
+    glfwMakeContextCurrent(window);            // Hace que esta ventana use el contexto OpenGL
 
-    glfwDestroyWindow(window); // Cierra la ventana
-    glfwTerminate(); // Cierra GLFW
 
-    return 0;
+    // GLAD busca y carga las funciones de OpenGL que vamos a utilizar
+    if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
+    {
+        std::cerr << "Failed to initialize GLAD" << std::endl; // Muestra el error
+        glfwTerminate();                       // Finaliza GLFW
+        return -1;                             // Termina el programa
+    }
+
+
+    glViewport(0, 0, 800, 800);                // Define inicialmente el área donde OpenGL dibuja
+
+    glEnable(GL_DEPTH_TEST);                    // Activa la prueba de profundidad
+    glDepthFunc(GL_LESS);                       // El fragmento más cercano gana sobre el más lejano
+
+    glEnable(GL_BLEND);                         // Activa la mezcla de colores para usar transparencia
+
+    // SRC_ALPHA usa el Alpha del objeto y ONE_MINUS_SRC_ALPHA usa lo que queda del fondo
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+
+    // Crea el objeto que almacenará el Vertex Shader
+    GLuint vertexShader = glCreateShader(GL_VERTEX_SHADER);
+
+    glShaderSource(
+        vertexShader,                          // Shader al que se le enviará el código
+        1,                                     // Cantidad de cadenas de código
+        &vertexShaderSource,                   // Código fuente del Vertex Shader
+        nullptr
+    );
+
+    glCompileShader(vertexShader);             // Compila el Vertex Shader
+    printShaderLog(vertexShader, "VERTEX");    // Revisa si hubo errores
+
+
+    // Crea el objeto que almacenará el Fragment Shader
+    GLuint fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
+
+    glShaderSource(
+        fragmentShader,                        // Shader al que se le enviará el código
+        1,                                     // Cantidad de cadenas
+        &fragmentShaderSource,                 // Código fuente del Fragment Shader
+        nullptr
+    );
+
+    glCompileShader(fragmentShader);           // Compila el Fragment Shader
+    printShaderLog(fragmentShader, "FRAGMENT");// Revisa si hubo errores
+
+
+    // Crea el Shader Program que junta el Vertex Shader y el Fragment Shader
+    GLuint shaderProgram = glCreateProgram();
+
+    glAttachShader(shaderProgram, vertexShader);   // Agrega el Vertex Shader al programa
+    glAttachShader(shaderProgram, fragmentShader); // Agrega el Fragment Shader al programa
+    glLinkProgram(shaderProgram);                  // Une ambos shaders en un solo programa
+
+    printProgramLog(shaderProgram);                // Revisa si hubo errores al enlazarlos
+
+    glDeleteShader(vertexShader);                  // Ya no necesitamos el shader individual
+    glDeleteShader(fragmentShader);                // Ya no necesitamos el shader individual
+
+
+    // Busca la ubicación de la variable uniform uMVP dentro del Vertex Shader
+    GLint mvpLoc = glGetUniformLocation(shaderProgram, "uMVP");
+
+
+    GLuint VAO_tri, VBO_tri;                       // Variables donde se guardarán VAO y VBO
+
+    glGenVertexArrays(1, &VAO_tri);                // Crea un VAO
+    glGenBuffers(1, &VBO_tri);                     // Crea un VBO
+
+    glBindVertexArray(VAO_tri);                     // Activa el VAO que vamos a configurar
+    glBindBuffer(GL_ARRAY_BUFFER, VBO_tri);         // Activa el VBO como buffer de vértices
+
+
+    // Copia todos los datos del arreglo triangles desde CPU hacia la GPU
+    // Se mandan juntos los 9 vértices con sus posiciones y colores
+    glBufferData(
+        GL_ARRAY_BUFFER,                           // Es un buffer de vértices
+        sizeof(triangles),                         // Tamaño total de todos los datos
+        triangles,                                 // Datos que queremos enviar
+        GL_STATIC_DRAW                             // Los datos no cambiarán constantemente
+    );
+
+
+    // Stride = distancia en memoria entre el inicio de un vértice y el siguiente
+    // sizeof calcula automáticamente el tamaño completo de Vertex3angle
+    // Un vértice contiene 3 floats de posición + 4 floats de color = 7 floats
+    GLsizei stride3angles = static_cast<GLsizei>(sizeof(Vertex3angle));
+
+
+    // Explica cómo encontrar la posición XYZ dentro de cada vértice
+    glVertexAttribPointer(
+        0,                                        // Location 0 = aPos en el Vertex Shader
+        3,                                        // Tiene 3 valores: X, Y, Z
+        GL_FLOAT,                                 // Cada valor es de tipo float
+        GL_FALSE,                                 // No normaliza los valores
+        stride3angles,                            // Distancia entre un vértice y el siguiente
+        (GLvoid*)offsetof(Vertex3angle, pos)       // Posición donde empieza pos dentro del struct
+    );
+
+    glEnableVertexAttribArray(0);                 // Activa el atributo location 0 = posición
+
+
+    // Explica cómo encontrar el color RGBA dentro de cada vértice
+    glVertexAttribPointer(
+        1,                                        // Location 1 = aColor en el Vertex Shader
+        4,                                        // Tiene 4 valores: R, G, B, Alpha
+        GL_FLOAT,                                 // Cada valor es de tipo float
+        GL_FALSE,                                 // No normaliza los valores
+        stride3angles,                            // Distancia entre un vértice y el siguiente
+        (GLvoid*)offsetof(Vertex3angle, color)     // Posición donde empieza color en el struct
+    );
+
+    glEnableVertexAttribArray(1);                 // Activa el atributo location 1 = color
+
+    glBindBuffer(GL_ARRAY_BUFFER, 0);             // Desactiva el VBO por ahora
+    glBindVertexArray(0);                         // Desactiva el VAO por ahora
+
+
+    // Define el color que aparece detrás de los triángulos
+    // Los valores representan R, G, B y Alpha
+    glClearColor(0.07f, 0.08f, 0.14f, 1.0f);
+
+
+    // El bucle se repite continuamente mientras la ventana siga abierta
+    while (!glfwWindowShouldClose(window))
+    {
+        // Borra el frame anterior antes de dibujar el siguiente
+        // COLOR limpia los colores y DEPTH limpia la información de profundidad
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+        glUseProgram(shaderProgram);              // Activa el programa de shaders
+
+
+        int width = 0;                            // Guardará el ancho actual
+        int height = 0;                           // Guardará el alto actual
+
+        // Obtiene el tamaño actual del framebuffer
+        glfwGetFramebufferSize(window, &width, &height);
+
+        glViewport(0, 0, width, height);           // Ajusta el dibujo al tamaño de la ventana
+
+
+        // Aspect = ancho dividido entre alto
+        // Evita que los objetos se deformen cuando cambia el tamaño de la ventana
+        float aspect = height > 0
+            ? static_cast<float>(width) / static_cast<float>(height)
+            : 1.0f;
+
+
+        // PROJECTION determina cómo se representa una escena 3D en la pantalla 2D
+        glm::mat4 projection = glm::perspective(
+            glm::radians(45.0f),                  // Campo de visión de 45 grados
+            aspect,                               // Relación entre ancho y alto
+            0.1f,                                 // Plano cercano: lo mínimo que puede verse
+            100.0f                                // Plano lejano: lo máximo que puede verse
+        );
+
+
+        // Obtiene los segundos que han pasado desde que GLFW comenzó
+        // Como t cambia continuamente, podemos utilizarlo para crear animación
+        float t = static_cast<float>(glfwGetTime());
+
+        float radius = 5.0f;                      // Distancia de la cámara al centro
+
+
+        // Calcula la posición de la cámara en X y Z
+        // sin y cos producen un movimiento circular
+        float camX = glm::sin(t * 0.25f) * radius;
+        float camZ = glm::cos(t * 0.25f) * radius - 1.5f;
+
+
+        // VIEW representa la cámara y desde dónde estamos observando la escena
+        glm::mat4 view = glm::lookAt(
+            glm::vec3(camX, 0.5f, camZ),          // Eye: posición de la cámara
+            glm::vec3(0.0f, 0.0f, -1.5f),        // Center: punto hacia donde mira
+            glm::vec3(0.0f, 1.0f, 0.0f)          // Up: dirección considerada como arriba
+        );
+
+
+        // MODEL representa las transformaciones que se aplican al objeto
+        // Comienza como matriz identidad, es decir, sin transformación
+        glm::mat4 model = glm::mat4(1.0f);
+
+
+        // Rotate modifica Model para hacer girar los tres triángulos
+        model = glm::rotate(
+            model,                                // Matriz que queremos transformar
+            t * 0.30f,                            // Ángulo: aumenta con el tiempo
+            glm::vec3(0.0f, 0.0f, 1.0f)          // Eje Z: indica alrededor de qué eje gira
+        );
+
+
+        // Combina las tres matrices necesarias para transformar los vértices
+        // El orden es importante: Projection * View * Model
+        glm::mat4 mvp = projection * view * model;
+
+
+        // Envía la matriz MVP desde el programa de C++ hasta el Vertex Shader
+        glUniformMatrix4fv(
+            mvpLoc,                               // Ubicación del uniform uMVP
+            1,                                    // Se envía una sola matriz
+            GL_FALSE,                             // No transpone la matriz
+            glm::value_ptr(mvp)                   // Convierte la matriz al formato de OpenGL
+        );
+
+
+        glBindVertexArray(VAO_tri);               // Activa el VAO que contiene los triángulos
+
+
+        // GL_TRIANGLES agrupa los vértices de 3 en 3
+        // Vértices 0,1,2 = rosado
+        // Vértices 3,4,5 = morado
+        // Vértices 6,7,8 = azul
+        glDrawArrays(
+            GL_TRIANGLES,                         // Dibuja triángulos
+            0,                                    // Empieza desde el primer vértice
+            9                                     // Dibuja los 9 vértices
+        );
+
+
+        glfwSwapBuffers(window);                  // Muestra en pantalla el frame terminado
+        glfwPollEvents();                         // Procesa teclado, mouse y eventos de ventana
+    }
+
+
+    // Libera de la memoria los recursos que creamos
+    glDeleteVertexArrays(1, &VAO_tri);            // Elimina el VAO
+    glDeleteBuffers(1, &VBO_tri);                 // Elimina el VBO
+    glDeleteProgram(shaderProgram);               // Elimina el programa de shaders
+
+    glfwDestroyWindow(window);                    // Destruye la ventana
+    glfwTerminate();                              // Finaliza GLFW
+
+    return 0;                                     // Indica que el programa terminó correctamente
 }
