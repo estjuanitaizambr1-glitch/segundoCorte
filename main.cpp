@@ -4,11 +4,12 @@
 #include <glad/glad.h>                      // Carga y permite usar las funciones de OpenGL
 #include <GLFW/glfw3.h>                     // Crea la ventana y permite manejar teclado y mouse
 #include <glm/glm/glm.hpp>                  // Permite trabajar con vectores y matrices
-#include <glm/glm/gtc/matrix_transform.hpp> // Permite usar perspective, lookAt y transformaciones
+#include <glm/glm/gtc/matrix_transform.hpp> // Permite usar perspective, lookAt, rotate y transformaciones
 #include <glm/glm/gtc/type_ptr.hpp>         // Permite enviar matrices de GLM hacia OpenGL
 
 #define STB_IMAGE_IMPLEMENTATION            // Hace que stb_image implemente sus funciones en este archivo
 #include "stb_image.h"                      // Permite cargar imágenes JPG y PNG para usarlas como texturas
+
 
 // Variables de la cámara
 glm::vec3 cameraPos(0.0f, 0.0f, 3.0f);     // Posición inicial de la cámara
@@ -24,23 +25,25 @@ bool firstMouse = true;                     // Evita un salto brusco al mover el
 float deltaTime = 0.0f;                     // Tiempo transcurrido entre un frame y el siguiente
 float lastFrame = 0.0f;                     // Tiempo del frame anterior
 
-// El Vertex Shader recibe los vértices y calcula dónde aparecen en la pantalla
+
+// El Vertex Shader recibe los vértices y calcula su posición final
 const char* vertexShaderSource = R"(
 #version 410 core
 
 layout(location = 0) in vec3 aPos;          // Recibe X, Y y Z de cada vértice
 layout(location = 1) in vec2 aTexCoord;     // Recibe U y V de la textura
 
-uniform mat4 uMVP;                           // Matriz que combina Model, View y Projection
+uniform mat4 uMVP;                           // Uniform que recibe Model, View y Projection combinadas
 
 out vec2 TexCoord;                           // Envía las coordenadas de textura al Fragment Shader
 
 void main()
 {
-    gl_Position = uMVP * vec4(aPos, 1.0);   // Calcula la posición final del vértice
+    gl_Position = uMVP * vec4(aPos, 1.0);   // Transforma el vértice usando la matriz MVP
     TexCoord = aTexCoord;                    // Pasa las coordenadas de textura al Fragment Shader
 }
 )";
+
 
 // El Fragment Shader decide el color final usando la textura
 const char* fragmentShaderSource = R"(
@@ -49,7 +52,7 @@ const char* fragmentShaderSource = R"(
 in vec2 TexCoord;                            // Recibe las coordenadas U y V
 out vec4 FragColor;                          // Guarda el color final de cada fragmento
 
-uniform sampler2D texture1;                  // Representa la textura que recibe OpenGL
+uniform sampler2D texture1;                  // Uniform que representa la textura
 
 void main()
 {
@@ -57,12 +60,14 @@ void main()
 }
 )";
 
+
 // Esta estructura guarda toda la información que necesita cada vértice
 struct VertexPyramid
 {
     GLfloat pos[3];                          // Posición X, Y y Z
     GLfloat texCoord[2];                     // Coordenadas U y V de la textura
 };
+
 
 // Revisa si un shader compiló correctamente y muestra el error si existe
 void printShaderLog(GLuint shader, const char* name)
@@ -78,6 +83,7 @@ void printShaderLog(GLuint shader, const char* name)
     }
 }
 
+
 // Revisa si el Vertex Shader y Fragment Shader se enlazaron correctamente
 void printProgramLog(GLuint program)
 {
@@ -92,13 +98,14 @@ void printProgramLog(GLuint program)
     }
 }
 
-// Procesa las teclas para mover la cámara
+
+// Procesa las teclas WASD para mover la cámara
 void processInput(GLFWwindow* window)
 {
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
         glfwSetWindowShouldClose(window, true); // ESC cierra la ventana
 
-    float cameraSpeed = 2.0f * deltaTime; // Velocidad ajustada al tiempo entre frames
+    float cameraSpeed = 2.0f * deltaTime;       // Mantiene la velocidad estable entre frames
 
     if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
         cameraPos += cameraSpeed * cameraFront; // W mueve la cámara hacia adelante
@@ -115,7 +122,8 @@ void processInput(GLFWwindow* window)
         cameraPos += cameraRight * cameraSpeed; // D mueve la cámara hacia la derecha
 }
 
-// Esta función se ejecuta automáticamente cada vez que se mueve el mouse
+
+// Esta función se ejecuta cada vez que se mueve el mouse
 void mouse_callback(GLFWwindow* window, double xpos, double ypos)
 {
     if (firstMouse)
@@ -125,18 +133,18 @@ void mouse_callback(GLFWwindow* window, double xpos, double ypos)
         firstMouse = false;
     }
 
-    float xoffset = static_cast<float>(xpos) - lastX; // Calcula cuánto se movió horizontalmente
-    float yoffset = lastY - static_cast<float>(ypos); // Calcula cuánto se movió verticalmente
+    float xoffset = static_cast<float>(xpos) - lastX; // Movimiento horizontal del mouse
+    float yoffset = lastY - static_cast<float>(ypos); // Movimiento vertical del mouse
 
     lastX = static_cast<float>(xpos); // Guarda la nueva posición X
     lastY = static_cast<float>(ypos); // Guarda la nueva posición Y
 
-    float sensitivity = 0.1f;         // Controla qué tan sensible es el movimiento del mouse
+    float sensitivity = 0.1f;         // Controla la sensibilidad del mouse
     xoffset *= sensitivity;
     yoffset *= sensitivity;
 
-    yaw += xoffset;                    // Movimiento horizontal del mouse cambia yaw
-    pitch += yoffset;                  // Movimiento vertical del mouse cambia pitch
+    yaw += xoffset;                    // Mouse en X cambia la rotación horizontal
+    pitch += yoffset;                  // Mouse en Y cambia la rotación vertical
 
     if (pitch > 89.0f)
         pitch = 89.0f;                 // Evita girar completamente hacia arriba
@@ -150,8 +158,9 @@ void mouse_callback(GLFWwindow* window, double xpos, double ypos)
     direction.y = sin(glm::radians(pitch));                           // Calcula Y
     direction.z = sin(glm::radians(yaw)) * cos(glm::radians(pitch)); // Calcula Z
 
-    cameraFront = glm::normalize(direction); // Convierte la dirección en un vector de longitud 1
+    cameraFront = glm::normalize(direction); // Actualiza hacia dónde mira la cámara
 }
+
 
 int main()
 {
@@ -167,7 +176,7 @@ int main()
 
     if (window == nullptr)
     {
-        std::cerr << "Failed to create GLFW window" << std::endl; // Muestra error si no se pudo crear
+        std::cerr << "Failed to create GLFW window" << std::endl;
         glfwTerminate();
         return -1;
     }
@@ -181,12 +190,13 @@ int main()
         return -1;
     }
 
-    glViewport(0, 0, 800, 800); // Define inicialmente el área de la ventana donde OpenGL dibuja
-    glEnable(GL_DEPTH_TEST);     // Activa profundidad para saber qué caras están delante y cuáles detrás
-    glDepthFunc(GL_LESS);        // Muestra el fragmento que esté más cerca de la cámara
+    glViewport(0, 0, 800, 800); // Define el área donde OpenGL dibuja
+    glEnable(GL_DEPTH_TEST);     // Activa la prueba de profundidad para superficies visibles
+    glDepthFunc(GL_LESS);        // Conserva el fragmento que está más cerca de la cámara
 
-    glfwSetCursorPosCallback(window, mouse_callback);                 // Conecta el movimiento del mouse con nuestra función
-    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);      // Captura el mouse como en un videojuego
+    glfwSetCursorPosCallback(window, mouse_callback);            // Conecta el movimiento del mouse con la cámara
+    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED); // Captura el mouse como en un videojuego
+
 
     // La pirámide tiene 4 caras laterales y una base cuadrada dividida en 2 triángulos
     VertexPyramid pyramid[] =
@@ -222,34 +232,40 @@ int main()
         {{-0.8f, -0.8f, -0.8f}, {0.0f, 0.0f}}
     };
 
+
+    // Crea y compila el Vertex Shader
     GLuint vertexShader = glCreateShader(GL_VERTEX_SHADER);               // Crea el Vertex Shader
     glShaderSource(vertexShader, 1, &vertexShaderSource, nullptr);        // Le pasa su código fuente
-    glCompileShader(vertexShader);                                        // Compila el Vertex Shader
+    glCompileShader(vertexShader);                                        // Compila el shader
     printShaderLog(vertexShader, "VERTEX");                               // Revisa si hubo errores
 
+    // Crea y compila el Fragment Shader
     GLuint fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);           // Crea el Fragment Shader
     glShaderSource(fragmentShader, 1, &fragmentShaderSource, nullptr);    // Le pasa su código fuente
-    glCompileShader(fragmentShader);                                      // Compila el Fragment Shader
+    glCompileShader(fragmentShader);                                      // Compila el shader
     printShaderLog(fragmentShader, "FRAGMENT");                           // Revisa si hubo errores
 
+    // Une los shaders en un programa
     GLuint shaderProgram = glCreateProgram();                             // Crea el programa de shaders
     glAttachShader(shaderProgram, vertexShader);                          // Agrega el Vertex Shader
     glAttachShader(shaderProgram, fragmentShader);                        // Agrega el Fragment Shader
-    glLinkProgram(shaderProgram);                                         // Une los dos shaders
+    glLinkProgram(shaderProgram);                                         // Enlaza los shaders
     printProgramLog(shaderProgram);                                       // Revisa errores de enlace
 
-    glDeleteShader(vertexShader);                                         // Ya no necesitamos el Vertex Shader separado
-    glDeleteShader(fragmentShader);                                       // Ya no necesitamos el Fragment Shader separado
+    glDeleteShader(vertexShader);                                         // Ya no se necesita separado
+    glDeleteShader(fragmentShader);                                       // Ya no se necesita separado
 
-    GLint mvpLoc = glGetUniformLocation(shaderProgram, "uMVP");           // Busca la matriz MVP en el shader
+    GLint mvpLoc = glGetUniformLocation(shaderProgram, "uMVP");           // Busca la variable uniform uMVP
 
+
+    // Configura VAO y VBO
     GLuint VAO, VBO;                                                      // VAO organiza y VBO guarda los vértices
     glGenVertexArrays(1, &VAO);                                           // Genera el VAO
     glGenBuffers(1, &VBO);                                                // Genera el VBO
 
     glBindVertexArray(VAO);                                               // Activa el VAO
     glBindBuffer(GL_ARRAY_BUFFER, VBO);                                   // Activa el VBO
-    glBufferData(GL_ARRAY_BUFFER, sizeof(pyramid), pyramid, GL_STATIC_DRAW); // Manda los vértices a la GPU
+    glBufferData(GL_ARRAY_BUFFER, sizeof(pyramid), pyramid, GL_STATIC_DRAW); // Envía los vértices de CPU a GPU
 
     GLsizei stride = static_cast<GLsizei>(sizeof(VertexPyramid));          // Tamaño completo de cada vértice
 
@@ -264,46 +280,50 @@ int main()
     glBindBuffer(GL_ARRAY_BUFFER, 0);                                     // Deja de usar el VBO por ahora
     glBindVertexArray(0);                                                 // Deja de usar el VAO por ahora
 
+
+    // Crea y configura la textura
     GLuint texture;                                                       // Guarda la referencia de la textura
     glGenTextures(1, &texture);                                           // Genera una textura
     glBindTexture(GL_TEXTURE_2D, texture);                                // Activa la textura
 
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);         // Permite repetir horizontalmente
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);         // Permite repetir verticalmente
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR); // Suaviza cuando se aleja
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);     // Suaviza cuando se acerca
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);         // Repite horizontalmente
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);         // Repite verticalmente
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR); // Suaviza al alejarse
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);     // Suaviza al acercarse
 
     stbi_set_flip_vertically_on_load(true);                               // Voltea la imagen para coincidir con OpenGL
 
-    int textureWidth, textureHeight, channels;                            // Aquí stb_image guarda datos de la imagen
-    unsigned char* data = stbi_load("textura.jpg", &textureWidth,
-                                    &textureHeight, &channels, 0);        // Carga textura.jpg
+    int textureWidth, textureHeight, channels;                            // Guarda información de la imagen
+    unsigned char* data = stbi_load("textura.JPG", &textureWidth,
+                                    &textureHeight, &channels, 0);        // Carga textura.JPG
 
     if (data)
     {
         GLenum format = (channels == 4) ? GL_RGBA : GL_RGB;               // Decide si la imagen usa RGB o RGBA
 
         glTexImage2D(GL_TEXTURE_2D, 0, format, textureWidth,
-                     textureHeight, 0, format, GL_UNSIGNED_BYTE, data);   // Manda los píxeles de la imagen a OpenGL
+                     textureHeight, 0, format, GL_UNSIGNED_BYTE, data);   // Envía los píxeles a OpenGL
 
-        glGenerateMipmap(GL_TEXTURE_2D);                                  // Crea versiones pequeñas de la textura
+        glGenerateMipmap(GL_TEXTURE_2D);                                  // Genera versiones pequeñas de la textura
 
         std::cout << "Textura cargada: "
                   << textureWidth << " x " << textureHeight << std::endl; // Muestra sus dimensiones
     }
     else
     {
-        std::cerr << "ERROR: No se pudo cargar textura.jpg" << std::endl; // Avisa si no encuentra la imagen
+        std::cerr << "ERROR: No se pudo cargar textura.JPG" << std::endl;
     }
 
     stbi_image_free(data);                                                // Libera la imagen de la memoria de CPU
 
+
     glUseProgram(shaderProgram);                                          // Activa el programa de shaders
-    glUniform1i(glGetUniformLocation(shaderProgram, "texture1"), 0);      // texture1 utilizará la unidad de textura 0
+    glUniform1i(glGetUniformLocation(shaderProgram, "texture1"), 0);      // Uniform texture1 usa la unidad 0
 
     glClearColor(0.07f, 0.08f, 0.14f, 1.0f);                             // Define el color del fondo
 
-    // Este es el loop principal: se repite mientras la ventana esté abierta
+
+    // Render loop: se repite mientras la ventana esté abierta
     while (!glfwWindowShouldClose(window))
     {
         float currentFrame = static_cast<float>(glfwGetTime());           // Obtiene el tiempo actual
@@ -317,34 +337,41 @@ int main()
 
         int width, height;
         glfwGetFramebufferSize(window, &width, &height);                  // Obtiene el tamaño actual de la ventana
-        glViewport(0, 0, width, height);                                  // Ajusta el renderizado al tamaño de la ventana
+        glViewport(0, 0, width, height);                                  // Ajusta el área de renderizado
 
-        float aspect = height > 0 ? (float)width / (float)height : 1.0f; // Calcula la relación ancho/alto
+        float aspect = height > 0 ? (float)width / (float)height : 1.0f; // Relación ancho/alto
 
+        // Projection define la perspectiva de la escena
         glm::mat4 projection = glm::perspective(
-            glm::radians(45.0f), aspect, 0.1f, 100.0f);                  // Crea la perspectiva 3D
+            glm::radians(45.0f), aspect, 0.1f, 100.0f);                  // FOV, aspecto, near y far
 
+        // View representa la cámara
         glm::mat4 view = glm::lookAt(
             cameraPos,
             cameraPos + cameraFront,
-            cameraUp);                                                    // Crea la vista usando la posición de la cámara
+            cameraUp);                                                    // WASD cambia posición y mouse cambia dirección
 
-        glm::mat4 model = glm::mat4(1.0f);                               // Matriz identidad: la pirámide permanece quieta
+        // Model transforma directamente la pirámide
+        glm::mat4 model = glm::mat4(1.0f);                               // Empieza con la matriz identidad
+        model = glm::rotate(model, currentFrame * 0.5f,
+                            glm::vec3(0.0f, 1.0f, 0.0f));                 // Rota la pirámide sobre su propio eje Y
 
-        glm::mat4 mvp = projection * view * model;                        // Combina perspectiva, cámara y objeto
-
-        glUniformMatrix4fv(mvpLoc, 1, GL_FALSE, glm::value_ptr(mvp));    // Manda la matriz MVP al Vertex Shader
+        // Combina las tres matrices y actualiza la variable uniform
+        glm::mat4 mvp = projection * view * model;                        // MVP = Projection * View * Model
+        glUniformMatrix4fv(mvpLoc, 1, GL_FALSE, glm::value_ptr(mvp));    // Envía uMVP desde CPU al Vertex Shader
 
         glActiveTexture(GL_TEXTURE0);                                     // Activa la unidad de textura 0
-        glBindTexture(GL_TEXTURE_2D, texture);                            // Activa textura.jpg
+        glBindTexture(GL_TEXTURE_2D, texture);                            // Activa textura.JPG
         glBindVertexArray(VAO);                                           // Activa los vértices de la pirámide
 
         glDrawArrays(GL_TRIANGLES, 0, 18);                                // Dibuja los 6 triángulos de la pirámide
 
         glfwSwapBuffers(window);                                          // Muestra el frame terminado
-        glfwPollEvents();                                                 // Procesa teclado, mouse y eventos de la ventana
+        glfwPollEvents();                                                 // Procesa teclado, mouse y eventos
     }
 
+
+    // Libera los recursos utilizados
     glDeleteVertexArrays(1, &VAO);                                        // Elimina el VAO
     glDeleteBuffers(1, &VBO);                                             // Elimina el VBO
     glDeleteTextures(1, &texture);                                        // Elimina la textura
